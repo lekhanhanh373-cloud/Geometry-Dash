@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Geometry-Block — Mini Game</title>
+<style>
+  :root{
+    --bg:#0f1724;
+    --ground:#0ea5a4;
+    --player:#fde047;
+    --ob:#ef4444;
+    --accent:#38bdf8;
+    --ui:#ffffff;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg) 0%, #071129 60%);font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  #gameWrap{height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:12px;box-sizing:border-box;}
+  canvas{background:
+    linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%);
+    border-radius:8px;
+    box-shadow: 0 8px 30px rgba(2,6,23,0.6);
+    max-width:100%; width:100%; height:66vh; display:block;
+  }
+  .hud{display:flex;gap:12px;align-items:center;color:var(--ui);width:100%;max-width:1100px;justify-content:space-between}
+  .left{display:flex;gap:12px;align-items:center}
+  .title{font-weight:700;color:var(--accent);letter-spacing:0.6px}
+  .info{color:rgba(255,255,255,0.9);font-size:14px}
+  .overlay{position:absolute;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .panel{background:rgba(3,7,18,0.8);backdrop-filter: blur(6px);padding:18px;border-radius:10px;color:var(--ui);text-align:center;pointer-events:auto;max-width:90%}
+  button{background:var(--player);border:none;padding:10px 18px;border-radius:8px;font-weight:700;cursor:pointer;color:#000}
+  .small{font-size:13px;color:rgba(255,255,255,0.85)}
+  footer{color:rgba(255,255,255,0.5);font-size:12px;margin-top:8px}
+  /* Rotate overlay */
+  #rotateOverlay{position:absolute;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.85);display:none;align-items:center;justify-content:center;pointer-events:auto;z-index:9999}
+  #rotatePanel{text-align:center;color:var(--ui);padding:20px;border-radius:12px}
+  @media (max-width:600px){
+    canvas{height:60vh}
+    .hud{flex-direction:column;align-items:flex-start;gap:6px}
+  }
+</style>
+</head>
+<body>
+<div id="gameWrap">
+  <div class="hud" style="position:relative;">
+    <div class="left">
+      <div class="title">Geometry-Block</div>
+      <div class="info small">Nhấp hoặc nhấn Space để nhảy • Giữ để nhảy liên tục</div>
+    </div>
+    <div style="text-align:right">
+      <div class="info">Khoảng cách: <span id="percent">0%</span></div>
+      <div class="small" id="speedText">Tốc độ: 0</div>
+    </div>
+  </div>
+
+  <div style="position:relative;width:100%;max-width:1100px">
+    <canvas id="c"></canvas>
+
+    <div class="overlay" id="overlay" style="display:none">
+      <div class="panel" id="panel">
+        <h2 id="resultTitle">Bạn đã thua!</h2>
+        <p class="small" id="resultText">Hình vuông chạm tam giác.</p>
+        <div style="margin-top:12px">
+          <button id="restartBtn">Chơi lại</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="rotateOverlay" aria-hidden="true">
+      <div id="rotatePanel">
+        <h2 style="margin:0 0 8px">Xoay ngang để chơi</h2>
+        <p class="small" style="margin:0 0 12px">Trò chơi yêu cầu chế độ ngang trên thiết bị di động. Vui lòng xoay điện thoại sang ngang để tiếp tục.</p>
+        <div style="font-size:40px;opacity:0.9">📱➡️↔️</div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>60 FPS • Đơn giản, màu sắc tương phản</footer>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const percentEl = document.getElementById('percent');
+  const speedText = document.getElementById('speedText');
+  const overlay = document.getElementById('overlay');
+  const panel = document.getElementById('panel');
+  const resultTitle = document.getElementById('resultTitle');
+  const resultText = document.getElementById('resultText');
+  const restartBtn = document.getElementById('restartBtn');
+  const rotateOverlay = document.getElementById('rotateOverlay');
+
+  // Config
+  const DESIGN_W = 1100;
+  const DESIGN_H = 600;
+
+  let W = 1100, H = 600;
+  function resize(){
+    const maxW = Math.min(window.innerWidth - 24, 1100);
+    canvas.width = Math.round(maxW * devicePixelRatio);
+    canvas.height = Math.round((maxW * 0.6) * devicePixelRatio);
+    canvas.style.width = maxW + 'px';
+    canvas.style.height = (maxW * 0.6) + 'px';
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    W = maxW;
+    H = Math.round(maxW * 0.6);
+  }
+  window.addEventListener('resize', () => { resize(); checkOrientation(); });
+  window.addEventListener('orientationchange', () => { setTimeout(checkOrientation, 120); });
+
+  resize();
+
+  // Game state
+  let running = true;
+  let gameOver = false;
+  let lastTime = 0;
+
+  // Derived
+  let GROUND_H = Math.round(H * 0.18);
+  let groundY = H - GROUND_H;
+  let PLAYER_SIZE = Math.round(H * 0.075);
+  let PLAYER_START_X = Math.round(W * 0.08);
+
+  const GRAVITY = 2200; // px/s^2
+  const JUMP_V = 720;   // px/s initial jump
+  let baseSpeed = Math.round(W * 0.5); // px/s world scroll speed
+  let speed = baseSpeed;
+
+  let distance = 0; // px progressed
+  const LEVEL_DISTANCE = W * 6; // total length to reach 100%
+
+  // Player object
+  const player = {
+    x: PLAYER_START_X,
+    y: groundY - PLAYER_SIZE,
+    w: PLAYER_SIZE,
+    h: PLAYER_SIZE,
+    vy: 0,
+    onGround: true
+  };
+
+  // Auto-run
+  const playerTargetX = Math.round(W * 0.22);
+  const playerAutoMoveSpeed = Math.round(W * 0.12); // px/s
+
+  let obstacles = [];
+  let spawnTimer = 0;
+  let spawnInterval = 1.2; // seconds
+
+  // Input-hold state
+  let inputHeld = false; // true while pressing/touch-hold/holding Space
+  let prevOnGround = true;
+
+  // Utilities
+  function rand(min,max){ return Math.random()*(max-min)+min; }
+
+  // Spawn obstacle (triangle on ground)
+  function spawnObstacle(){
+    const size = Math.round(rand(H*0.08, H*0.16));
+    const x = W + size + rand(0, W*0.4);
+    obstacles.push({ x, size, passed:false });
+  }
+
+  // Geometry helpers
+  function pointInTri(px,py, ax,ay, bx,by, cx,cy){
+    const v0x = cx - ax, v0y = cy - ay;
+    const v1x = bx - ax, v1y = by - ay;
+    const v2x = px - ax, v2y = py - ay;
+    const dot00 = v0x*v0x + v0y*v0y;
+    const dot01 = v0x*v1x + v0y*v1y;
+    const dot02 = v0x*v2x + v0y*v2y;
+    const dot11 = v1x*v1x + v1y*v1y;
+    const dot12 = v1x*v2x + v1y*v2y;
+    const invDenom = 1 / (dot00 * dot11 - dot01 * dot01 || 1);
+    const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+    const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+    return (u >= 0) && (v >= 0) && (u + v < 1);
+  }
+
+  function rectTriColl(rx,ry,rw,rh, tri){
+    const ax = tri.x, ay = groundY - tri.size;
+    const bx = tri.x + tri.size/2, by = groundY;
+    const cx = tri.x + tri.size, cy = groundY - tri.size;
+    const corners = [[rx,ry],[rx+rw,ry],[rx,ry+rh],[rx+rw,ry+rh]];
+    for(const [px,py] of corners) if(pointInTri(px,py, ax,ay, bx,by, cx,cy)) return true;
+    const triPts = [[ax,ay],[bx,by],[cx,cy]];
+    for(const [px,py] of triPts) if(px>=rx && px<=rx+rw && py>=ry && py<=ry+rh) return true;
+    return false;
+  }
+
+  // Jump action (single)
+  function tryJump(){
+    if(gameOver) return;
+    if(player.onGround){
+      player.vy = -JUMP_V;
+      player.onGround = false;
+    }
+  }
+
+  // Input handling: press/hold behavior
+  function onPressStart(e){
+    // if pressing UI or overlays, ignore for game input
+    const t = e.target;
+    const ignoreTags = ['INPUT','TEXTAREA','SELECT','OPTION','BUTTON','A'];
+    if(t && (t.isContentEditable || ignoreTags.includes(t.tagName))) return;
+    // if rotate overlay visible, do nothing
+    if(rotateOverlay.style.display !== 'none') return;
+    // if result overlay visible and press inside panel -> allow button events (don't start game input)
+    if(overlay.style.display !== 'none' && panel.contains(t)) return;
+
+    inputHeld = true;
+    tryJump();
+    // prevent default scroll on touchstart if appropriate
+    if(e.type === 'touchstart') e.preventDefault();
+  }
+  function onPressEnd(e){
+    inputHeld = false;
+  }
+
+  // Keyboard
+  window.addEventListener('keydown', e => {
+    if(e.code === 'Space'){ e.preventDefault(); onPressStart(e); }
+    if(e.code === 'Enter' && gameOver){ restart(); }
+  });
+  window.addEventListener('keyup', e => {
+    if(e.code === 'Space'){ onPressEnd(e); }
+  });
+
+  // Mouse events
+  canvas.addEventListener('mousedown', onPressStart);
+  window.addEventListener('mouseup', onPressEnd);
+
+  // Touch events: canvas + whole-window
+  canvas.addEventListener('touchstart', onPressStart, {passive:false});
+  canvas.addEventListener('touchend', onPressEnd, {passive:true});
+  window.addEventListener('touchstart', function(e){
+    const t = e.target;
+    const ignoreTags = ['INPUT','TEXTAREA','SELECT','OPTION','BUTTON','A'];
+    if(t && (t.isContentEditable || ignoreTags.includes(t.tagName))) return;
+    if(rotateOverlay.style.display !== 'none') return;
+    if(overlay.style.display !== 'none' && panel.contains(t)) return;
+    inputHeld = true;
+    tryJump();
+    e.preventDefault();
+  }, {passive:false});
+  window.addEventListener('touchend', function(){ inputHeld = false; }, {passive:true});
+
+  // Restart
+  function restart(){
+    gameOver = false;
+    running = true;
+    overlay.style.display = 'none';
+    obstacles = [];
+    spawnTimer = 0;
+    distance = 0;
+    speed = baseSpeed;
+    // recompute some derived values if window resized since start
+    recomputeDerived();
+    player.x = PLAYER_START_X;
+    player.y = groundY - PLAYER_SIZE;
+    player.vy = 0;
+    player.onGround = true;
+    lastTime = 0;
+    requestAnimationFrame(loop);
+  }
+  restartBtn.addEventListener('click', restart);
+  restartBtn.addEventListener('touchend', function(e){ e.stopPropagation(); restart(); }, {passive:false});
+
+  // Game over
+  function endGame(){
+    gameOver = true;
+    running = false;
+    resultTitle.textContent = 'Bạn đã thua!';
+    resultText.textContent = 'Hình vuông chạm tam giác.';
+    overlay.style.display = 'flex';
+  }
+
+  // recompute derived dimensions (useful when restarting or resize)
+  function recomputeDerived(){
+    GROUND_H = Math.round(H * 0.18);
+    groundY = H - GROUND_H;
+    PLAYER_SIZE = Math.round(H * 0.075);
+    PLAYER_START_X = Math.round(W * 0.08);
+    baseSpeed = Math.round(W * 0.5);
+    speed = baseSpeed;
+    // update player size if changed
+    player.w = PLAYER_SIZE;
+    player.h = PLAYER_SIZE;
+  }
+
+  // Orientation check: if mobile and in portrait, force rotate overlay and pause game
+  function isTouchDevice(){
+    return ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
+  }
+  function checkOrientation(){
+    const portrait = window.innerHeight > window.innerWidth;
+    if(isTouchDevice() && portrait){
+      // show rotate overlay, pause game
+      rotateOverlay.style.display = 'flex';
+      // pause running but keep gameOver state intact
+      running = false;
+    } else {
+      // hide overlay and resume if not game over
+      rotateOverlay.style.display = 'none';
+      if(!gameOver){
+        running = true;
+        lastTime = 0;
+        requestAnimationFrame(loop);
+      }
+    }
+  }
+  checkOrientation();
+
+  // Draw helpers
+  function drawBackground(){
+    ctx.fillStyle = '#0b1220';
+    ctx.fillRect(0,0,W,H);
+    const g = ctx.createLinearGradient(0, groundY,0,H);
+    g.addColorStop(0,'#062129');
+    g.addColorStop(1,'#032024');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, groundY, W, H-groundY);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ground') || '#0ea5a4';
+    ctx.fillRect(0, groundY + (H-groundY)*0.55, W, H - (groundY + (H-groundY)*0.55));
+  }
+
+  function drawPlayer(){
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(player.x + 6, player.y + player.h + 6, player.w - 6, 6);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--player') || '#fde047';
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(player.x + 4, player.y + 4, player.w - 8, player.h - 8);
+  }
+
+  function drawObstacle(o){
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(o.x, groundY);
+    ctx.lineTo(o.x + o.size/2, groundY - o.size);
+    ctx.lineTo(o.x + o.size, groundY);
+    ctx.closePath();
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ob') || '#ef4444';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(o.x + o.size*0.12, groundY - o.size*0.42);
+    ctx.lineTo(o.x + o.size*0.48, groundY - o.size*0.92);
+    ctx.lineTo(o.x + o.size*0.86, groundY - o.size*0.42);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHUD(){
+    const barW = Math.min(420, W*0.42);
+    const barH = 10;
+    const barX = 14;
+    const barY = 14;
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(barX, barY, barW, barH);
+    const pct = Math.min(1, distance / LEVEL_DISTANCE);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#38bdf8';
+    ctx.fillRect(barX, barY, barW * pct, barH);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--player');
+    ctx.fillRect(barX + barW + 12, barY-4, 14, 14);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '13px system-ui, Inter, Arial';
+    ctx.fillText(Math.floor(pct*100) + '%', barX + barW + 36, barY + 10);
+  }
+
+  // Main loop
+  function loop(ts){
+    if(!lastTime) lastTime = ts;
+    const dt = Math.min(0.033, (ts - lastTime) / 1000);
+    lastTime = ts;
+
+    if(running){
+      // speed up gently
+      speed = baseSpeed * (1 + distance / (LEVEL_DISTANCE*1.5));
+      speed = Math.min(speed, baseSpeed * 2.6);
+
+      distance += speed * dt;
+
+      // auto move player to visual starting position
+      if(player.x < playerTargetX) {
+        player.x += playerAutoMoveSpeed * dt;
+        if(player.x > playerTargetX) player.x = playerTargetX;
+      }
+
+      // spawn
+      spawnTimer -= dt;
+      if(spawnTimer <= 0){
+        spawnObstacle();
+        spawnInterval = rand(0.9, 1.5) - Math.min(0.6, distance / (LEVEL_DISTANCE));
+        spawnTimer = spawnInterval;
+      }
+
+      // move obstacles
+      for(let i = obstacles.length - 1; i >= 0; i--){
+        const o = obstacles[i];
+        o.x -= speed * dt;
+        if(o.x + o.size < -50) obstacles.splice(i,1);
+        if(!o.passed && o.x + o.size < player.x) o.passed = true;
+      }
+
+      // physics
+      const wasOnGround = player.onGround;
+      player.vy += GRAVITY * dt;
+      player.y += player.vy * dt;
+      if(player.y + player.h >= groundY){
+        player.y = groundY - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      } else {
+        player.onGround = false;
+      }
+
+      // if we just landed and input is held, auto-jump again
+      if(player.onGround && !wasOnGround && inputHeld){
+        tryJump();
+      }
+
+      // collisions
+      for(const o of obstacles){
+        if(rectTriColl(player.x, player.y, player.w, player.h, o)){
+          endGame();
+          break;
+        }
+      }
+
+      // win condition
+      if(distance >= LEVEL_DISTANCE){
+        running = false;
+        gameOver = true;
+        resultTitle.textContent = 'Bạn thắng!';
+        resultText.textContent = 'Đã hoàn thành quãng đường!';
+        overlay.style.display = 'flex';
+      }
+    }
+
+    // draw
+    drawBackground();
+    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+    for(let i=0;i<20;i++){
+      const x = ((i*180) - (distance*0.22) % 180);
+      ctx.fillRect(x, groundY - 60, 80, 2);
+    }
+    for(const o of obstacles) drawObstacle(o);
+    drawPlayer();
+    drawHUD();
+
+    percentEl.textContent = Math.min(100, Math.floor((distance / LEVEL_DISTANCE)*100)) + '%';
+    speedText.textContent = 'Tốc độ: ' + Math.round(speed) + ' px/s';
+
+    if(!gameOver) requestAnimationFrame(loop);
+    else lastTime = 0;
+  }
+
+  // Start
+  lastTime = 0;
+  spawnTimer = 0.6;
+  recomputeDerived();
+  requestAnimationFrame(loop);
+
+  // startup prompt
+  (function showPrompt(){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px system-ui, Inter, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Nhấp hoặc giữ / nhấn Space để nhảy liên tục', W/2, H/2);
+    ctx.restore();
+  })();
+
+  // initial orientation check
+  checkOrientation();
+
+})();
+</script>
+</body>
+        </html>
